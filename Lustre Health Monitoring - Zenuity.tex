@@ -1,0 +1,44 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{setspace}
+\usepackage{graphicx}
+\usepackage{dirtree}
+\usepackage[hang]{footmisc}
+\usepackage{vhistory}
+\renewcommand{\hangfootparskip}{10pt}
+\setlength{\skip\footins}{1cm}
+\setlength{\parskip}{1em}
+\usepackage[a4paper, total={6in, 8in}]{geometry}
+
+
+\title{%
+Lustre Health Monitoring \\
+\large Zenuity Oden Cluster (NGSC)}
+\author{Carlos Thomaz - cthomaz@ddn.com}
+\date{\today}
+\begin{document}
+
+\maketitle
+
+
+\begin{center}
+    \includegraphics[scale=0.14]{logo.png}\\[1cm] 
+\end{center}
+
+\newpage
+
+\begin{versionhistory}
+    \vhEntry{Draft}{05.06.20}{CT}{Initial version}
+\end{versionhistory}
+
+
+\newpage
+\section{Introduction}
+
+This document describe the design of an auxiliary system to provide generic health status for the parallel file systems including the storage hardware components. The goal is establish a low level design for what could be used to complement the proposed monitoring solution, covering areas where DDN Insight will not be able to provide in the proposed production release for Zenuity.
+
+\section{Monitoring Layers}
+Lustre File system health requires two levels of monitoring: Hardware and Software layer. The hardware layer is mostly covered by DDN Insight and or low level alarms that could be set on the SFAOS layer and won't be extensively described in this document. The software layer will focus on High Availability management and resource management for Lustre as per the DDN best practices and what is possible to be implemented as a solution for File system monitoring.
+
+Often data must be correlated and hardware and software log artifacts must be analysed in conjunction since hardware issues may impact the file system performance and health.
+\end{document}

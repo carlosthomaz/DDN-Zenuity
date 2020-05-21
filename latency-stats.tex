@@ -1,0 +1,178 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{setspace}
+\usepackage{graphicx}
+\usepackage{dirtree}
+\usepackage{verbatimbox}
+\usepackage[hang]{footmisc}
+\usepackage{vhistory}
+\renewcommand{\hangfootparskip}{10pt}
+\setlength{\skip\footins}{1cm}
+\setlength{\parskip}{1em}
+\usepackage[a4paper, total={6in, 8in}]{geometry}
+
+
+\title{%
+Lustre File System - Latency Metrics \\
+\large Zenuity Oden Cluster (NGSC)}
+\author{Carlos Thomaz - cthomaz@ddn.com}
+\date{\today}
+\begin{document}
+
+\maketitle
+
+
+\begin{center}
+    \includegraphics[scale=0.14]{logo.png}\\[1cm] 
+\end{center}
+
+\newpage
+
+\begin{versionhistory}
+    \vhEntry{Draft}{05.12.20}{CT}{version 1.0}
+\end{versionhistory}
+
+
+\newpage
+\section{Introduction}
+As required on the RFP, DDN and Whamcloud has developed a Lustre client patch that implement performance metrics that measures and report latency per type of IO operation. This document describes how these metrics can be interpreted.
+
+\section{Client Side patch}
+Latency metrics is a client side patch and must be evaluated per client basis. It reports statistics per \textbf{file system}. The performance counters are implemented on \textit{Lustre llite} layer and can be found on /sys/kernel/debug/lustre/llite/\textit{file-system-id}/stats. Where \textit{file system id} is a unique identificator for the file system.
+
+\section{File Structure}
+The contents of this file is updated by Lustre client. Upon file system activation, the file structure will look like.
+\begin{verbatim}
+snapshot_time             1589367115.137626185 secs.nsecs
+write_bytes               10000 samples [bytes] 4096 4096 40960000
+write                     10000 samples [usec] 6 52 71989
+open                      1 samples [usec] 1 1 1
+close                     1 samples [usec] 173 173 173
+truncate                  1 samples [usec] 499 499 499
+getxattr                  1 samples [usec] 93 93 93
+inode_permission          11 samples [usec] 0 0 0
+\end{verbatim}
+
+The first column is the type of operation, followed by the number of samples considered, the minimum, average and maximum latency value in microseconds.
+
+The write\_bytes and read\_bytes are not performance counters. It just report what are the samllest reads and writes, average and largest read and write operations. If a single file is written with $X$ block size, the minimum write\_bytes will be the size of the block, the maximum will be the $X$ multiplied by the number of times the operation is executed and average will also be reported as the block size. However, when multiple operations are executed concurrently, it is expected to see different average write\_bytes and read\_bytes since the block size may be different from each I/O client thread.
+
+\section{Functional Tests}
+\subsection{One small I/O}
+In this example a very tiny file is written. The I/O client thread execute a single write of 512 bytes long. The number of samples can be verified as 1 write sample. The minimum, average and maximum are also reported as 512. The latency for that operation is reported as 232$\mu$s.
+
+\begin{verbatim}
+# echo 0 > /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+
+# cat /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+snapshot_time             1589368748.026428053 secs.nsecs
+inode_permission          4 samples [usec] 0 0 0
+
+# dd if=/dev/zero of=very-tiny-file.out bs=512 count=1
+1+0 records in
+1+0 records out
+512 bytes copied, 0.000498313 s, 1.0 MB/s
+
+# cat /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+snapshot_time             1589368782.046475634 secs.nsecs
+write_bytes               1 samples [bytes] 512 512 512
+write                     1 samples [usec] 232 232 232
+open                      1 samples [usec] 1 1 1
+close                     1 samples [usec] 150 150 150
+inode_permission          15 samples [usec] 0 0 0
+
+\end{verbatim}
+
+\subsection{Larger write Operation, small blocks}
+In this example a larger file is written (51MB) but each I/O operation writes the same 512 bytes block. It's noticeable the number of samples matches the \textit{dd count}. However the latency in this case varies from 0 to 92886$\mu$s. 
+\begin{verbatim}
+# echo 0 > /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+
+# cat /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+snapshot_time             1589369067.618939184 secs.nsecs
+inode_permission          4 samples [usec] 0 0 0
+
+# dd if=/dev/zero of=larger-file-512b.out bs=512 count=100000
+100000+0 records in
+100000+0 records out
+51200000 bytes (51 MB, 49 MiB) copied, 0.260019 s, 197 MB/s
+
+# cat /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+snapshot_time             1589369122.744706775 secs.nsecs
+write_bytes               100000 samples [bytes] 512 512 51200000
+write                     100000 samples [usec] 0 223 92886
+open                      1 samples [usec] 1 1 1
+close                     1 samples [usec] 143 143 143
+inode_permission          15 samples [usec] 0 0 0
+
+\end{verbatim}
+\subsection{Larger write Operation, large blocks}
+In this example a larger file is written with one large block.  
+\begin{verbatim}
+# echo 0 > /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+
+# dd if=/dev/zero of=larger-file-5G.out bs=51200000 count=1
+1+0 records in
+1+0 records out
+51200000 bytes (51 MB, 49 MiB) copied, 0.0413857 s, 1.2 GB/s
+
+# cat /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+snapshot_time             1589369282.166955262 secs.nsecs
+write_bytes               1 samples [bytes] 51200000 51200000 51200000
+write                     1 samples [usec] 29079 29079 29079
+open                      1 samples [usec] 3 3 3
+close                     1 samples [usec] 209 209 209
+inode_permission          11 samples [usec] 0 0 0
+\end{verbatim}
+
+\subsection{Small read Operation}
+\begin{verbatim}
+# echo 0 > /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+
+# cat /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+snapshot_time             1589369918.698850488 secs.nsecs
+inode_permission          4 samples [usec] 0 0 0
+
+# dd if=very-tiny-file.out of=/dev/null
+1+0 records in
+1+0 records out
+512 bytes copied, 0.00020376 s, 2.5 MB
+
+# cat /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+snapshot_time             1589369974.319486914 secs.nsecs
+read_bytes                1 samples [bytes] 512 512 512
+read                      1 samples [usec] 2 2 2
+open                      1 samples [usec] 1 1 1
+close                     1 samples [usec] 111 111 111
+seek                      1 samples [usec] 0 0 0
+inode_permission          14 samples [usec] 0 0 0
+\end{verbatim}
+
+\subsection{Larger Read}
+In this example it is noticeable other I/O operations that are required when reading larger files, like \textit{seek}.
+
+\begin{verbatim}
+# echo 0 > /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+
+# cat /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+snapshot_time             1589370089.056553166 secs.nsecs
+inode_permission          4 samples [usec] 0 0 0
+
+# dd if=larger-file-512b.out of=/dev/null
+100000+0 records in
+100000+0 records out
+51200000 bytes (51 MB, 49 MiB) copied, 0.127731 s, 401 MB/s
+
+# cat /sys/kernel/debug/lustre/llite/ztest-ffff954b83f37000/stats
+snapshot_time             1589371818.456210259 secs.nsecs
+read_bytes                100000 samples [bytes] 512 512 51200000
+read                      100000 samples [usec] 0 81 1041
+open                      1 samples [usec] 129 129 129
+close                     1 samples [usec] 166 166 166
+seek                      1 samples [usec] 0 0 0
+inode_permission          18 samples [usec] 0 0 0
+    
+\end{verbatim}
+
+
+\end{document}

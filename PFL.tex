@@ -1,0 +1,288 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{setspace}
+\usepackage{graphicx}
+\usepackage{dirtree}
+\usepackage[hang]{footmisc}
+\usepackage{vhistory}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows}
+\renewcommand{\hangfootparskip}{10pt}
+\setlength{\skip\footins}{1cm}
+\setlength{\parskip}{1em}
+\usepackage[a4paper, total={6in, 8in}]{geometry}
+
+
+
+\title{%
+Implemeting Progressive File Layouts on Lustre File System \\
+\large Zenuity Oden Cluster (NGSC)}
+\author{Carlos Thomaz - cthomaz@ddn.com}
+\date{\today}
+\begin{document}
+
+\maketitle
+
+
+\begin{center}
+    \includegraphics[scale=0.14]{logo.png}\\[1cm] 
+\end{center}
+
+\newpage
+
+\begin{versionhistory}
+    \vhEntry{Draft}{05.12.20}{CT}{Initial version}
+    \vhEntry{1.0}{05.20.20}{CT}{Added DMF use case}
+
+\end{versionhistory}
+
+
+\newpage
+\section{Introduction}
+Progressive File Layouts or Composite File Layouts simplifies the use of Lustre so that users can expect reasonable performance for a variety of normal file IO patterns without the need to explicitly understand their IO model or Lustre usage details in advance. In particular, users do not necessarily need to know the size or concurrency of output files in advance of their creation and explicitly specify an optimal layout for each file in order to achieve good performance for both highly concurrent shared-single-large-file IO or parallel IO to many smaller per-process files. 
+
+We suggest the implementation of PFL to also simplify cases where bulk data is requested to be restored or ingested in a non-deterministic path, such as the USE CASE of DMF data recovering.
+
+This document discusses the principles and alternatives for the PFL implementation on Zenuity's ODEN cluster.
+
+
+\section{How Lustre File System Striping Works}
+In a Lustre file system, the MDS allocates objects to OSTs using either a round-robin algorithm or a weighted algorithm. When the amount of free space is well balanced (i.e., by default, when the free space across OSTs differs by less than 17\%), the round-robin algorithm is used to select the next OST to which a stripe is to be written. Periodically, the MDS adjusts the striping layout to eliminate some degenerated cases in which applications that create very regular file layouts (striping patterns) preferentially use a particular OST in the sequence.
+
+Normally the usage of OSTs is well balanced. However, if users create a small number of exceptionally large files or incorrectly specify striping parameters, imbalanced OST usage may result. When the free space across OSTs differs by more than a specific amount (17\% by default), the MDS then uses weighted random allocations with a preference for allocating objects on OSTs with more free space. (This can reduce I/O performance until space usage is re-balanced again.) 
+\subsection{Considerations}
+Whether you should set up file striping and what parameter values you select depends on your needs. A good rule of thumb is to stripe over as few objects as will meet those needs and no more.
+
+Some reasons for using striping include:
+\begin{itemize}
+    \item Providing high-bandwidth access. Many applications require high-bandwidth access to a single file, which may be more bandwidth than can be provided by a single OST. Examples are a scientific application that writes to a single file from hundreds of nodes, or a binary executable that is loaded by many nodes when an application starts. In cases like these, a file can be striped over as many OSTs as it takes to achieve the required peak aggregate bandwidth for that file. Striping across a larger number of OSTs should only be used when the file size is very large and/or is accessed by many nodes at a time. Currently, Lustre files can be striped across up to 2000 OSTs, the maximum stripe count for an ldiskfs file system.
+    \item Improving performance when OSS bandwidth is exceeded. Striping across many OSSs can improve performance if the aggregate client bandwidth exceeds the server bandwidth and the application reads and writes data fast enough to take advantage of the additional OSS bandwidth. The largest useful stripe count is bounded by the I/O rate of the clients/jobs divided by the performance per OSS.
+    \item Providing space for very large files. Striping is useful when a single OST does not have enough free space to hold the entire file, which is unsual but a theoretical problem.
+\end{itemize}
+
+However, there are reasons to minimize or even do not use Lustre stripping.
+\begin{itemize}
+    \item Increased overhead. Striping results in more locks and extra network operations during common operations such as stat and unlink. Even when these operations are performed in parallel, one network operation takes less time than 100 operations. Increased overhead also results from server contention. Consider a cluster with 100 clients and 100 OSSs, each with one OST. If each file has exactly one object and the load is distributed evenly, there is no contention and the disks on each server can manage sequential I/O. If each file has 100 objects, then the clients all compete with one another for the attention of the servers, and the disks on each node seek in 100 different directions resulting in needless contention.
+    \item Increased risk. When files are striped across all servers and one of the servers fails, a small part of each striped file is lost. By comparison, if each file has exactly one stripe, fewer files are lost, but they are lost in their entirety. Many users would prefer to lose some of their files entirely than all of their files partially.
+\end{itemize}
+
+\subsection{Choosing a Stripe Size}
+Choosing a stripe size is a balancing task, but reasonable defaults are described below. The stripe size has no effect on a single-stripe file.
+
+\begin{itemize}
+    \item The stripe size must be a multiple of the page size. Lustre software tools enforce a multiple of 64 KB (the maximum page size on ia64 and PPC64 nodes) so that users on platforms with smaller pages do not accidentally create files that might cause problems for ia64 clients.
+
+    \item The smallest recommended stripe size is 512 KB. Although it is possible to create files with a stripe size of 64 KB, the smallest practical stripe size is 512 KB because  Lustre file system sends 1MB chunks over the network. Choosing a smaller stripe size may result in inefficient I/O to the disks and reduced performance.
+
+    \item A good stripe size for sequential I/O using high-speed networks is between 1 MB and 4 MB. In most situations, stripe sizes larger than 4 MB may result in longer lock hold times and contention during shared file access. Utilization of 16MB I/Os are encouraging if the files are extremely large and the workload is mainly sequential.
+
+    \item The maximum stripe size is 4 GB. Using a large stripe size can improve performance when accessing very large files. It allows each client to have exclusive access to its own part of a file. However, a large stripe size can be counterproductive in cases where it does not match your I/O pattern. Large stripe sizes are not recommended to be applied as default. Instead, if noticeable a very large stripe size is beneficial, it is recommended to apply the setting per file.
+
+    \item Choose a stripe pattern that takes into account the write patterns of your application. Writes that cross an object boundary are slightly less efficient than writes that go entirely to one server. If the file is written in a consistent and aligned way, make the stripe size a multiple of the write() size.
+
+\end{itemize}
+
+\subsection{File pre-creation}
+Lustre file system allows users to pre-create the file. Using \textit{lfs setstripe} command and specifying a file name will pre-create the file, so the MDS will pre-create the i-node and according to the settings will get parametrize the file layout (information like number of stripes, stripe size, etc). This used to be one technique when PFL wasn't available. 
+
+The idea is, before the file is created, to define either on the parent directory or per file basis, how the layout will look alike passing the \textit{lfs setstripe} parameters through a wrapper scripts or job script. In case of DMF USE CASEs this strategy could potentially work assuming the file layout is stored somewhere out of the Lustre metadata and a programming logic is implemented so each file, before it is restored, is will be pre-created with an identical layout. Although it is theoretically possible, this would require an extremely efficient method due the additional checkings and logic to be implemented or integrated with DMF restore.
+
+\subsection{Using Progressive File Layouts}
+Progressive File Layouts will certainly simplify the restore and file layout setting in several cases, including the DMF USE CASEs. PFL allows users and system administrators to define layouts for each file or directory on Lustre file system, similarly to the Lustre striping. However, PFL adds a dynamic components where conditions can be applied according to the size of each file. A PFL setting could be exemplified as the table \ref{tab:Generic PFL Example}.
+
+\begin{table}[h]
+\centering
+ \begin{tabular}{||c c c||} 
+ \hline
+ OST tier & Stripe Layout & Component \\ [0.5ex] 
+ \hline\hline
+ flash.nv1 & 0-1MB & 1 stripe \\ 
+ \hline
+ hdd.pool & 1-128MB & 1 stripe \\ 
+ \hline
+ hdd.pool & 128-256MB & 2 stripes\\
+ \hline
+  hdd.pool & 256-1024MB & 4 stripes\\
+ \hline
+   hdd.pool & 1024MB-EOF & 8 stripes\\
+ \hline
+ \end{tabular}
+ \caption{Example of File Layout using PFL}
+ \label{tab:Generic PFL Example}
+\end{table}
+
+In this example, files smaller than 1MB will be automatically restored into the flash layer located on the NV400 subsystems and will use only one stripe. Files larger than 1MB and smaller than 128MB will be located in a single stripe on the rotational devices tier, specified as hdd.pool. In this case Lustre will assign one OST that belongs to the hdd.pool for the file object. And as the file size grows a different layout will be utilized as the table \ref{tab:Generic PFL Example} suggests.
+
+Doing it so, prevents the need of assigning specific file layout for each object neither the use of one or few generic layouts that may not adapt very well to the different workloads.
+
+\subsection{Designing the Composite Layout}
+A key design decision is to define the number of stripes and how it will scale as the file grows. The fact the file is very large not necessarily implies it needs to be striped. The following criteria must be considered when stripping a file.
+\begin{itemize}
+    \item File size
+    \item Concurrency
+    \item I/O Pattern
+\end{itemize}
+
+\subsubsection{File size}
+File size is the obvious criteria utilized for file stripping. A very large file may require multiple OSTs for performance and data distribution reasons. It is normal to think that large files will necessarily require more bandwidth, but this may not be necessarily true. Sometimes a large file is rarely accessible and when it is it may be accessible for single thread jobs in a non-parallel fashion.
+
+\subsubsection{Concurrency}
+Although concurrency is a lot harder to measure, this is probably the best indicator for file striping. Files that requires access from multiple threads simultaneously may have advantages of having multiple stripes distributing the concurrency across OSSs. 
+
+If it's known that a file or a set of file to be accessed concurrently, it is suggested to work in a special and more specific composite layout rule for it. 
+
+\subsubsection{I/O pattern}
+The I/O pattern is what mainly dictates the file layout. Usually I/O pattern is intrinsically linked to the file size and users have better control of location of these files making easier to implement a striping policy. 
+
+\subsubsection{Understanding the underneath storage devices}
+It is extremely important to understand the underneath storage targets as well the hierarchy implemented, for a successful PFL implementation. The understanding of type of OSTs, number of available resources as well the workload characteristics, combined will make easier to find out what would be a generic PFL layout. 
+
+ODEN's parallel file system architecture is initially based on two file system tiers plus additional archive/HSM sub-system (DMF) which is not a Lustre file system component but is integrated on. The parallel file system will provide a flash based storage tier, intended to accelerate small file IOs and rotational device tier intended to provide large file access high throughput and high capacity storage.
+
+It is strongly suggested to configure, at least, two OST pools\footnote{OST pools enables storage administration to group OSTs as resources sets}. One OST pool restricted to the flash based devices and one OST pool for the rotational devices. Data may be explicitly pinned to a specific OST or pool, but could be relaxed and only assigned to the pool, letting Lustre decides on each OST the object(s) will be stored. 
+
+The utilization of flash based devices is easier. Since the intention of these devices are to accelerate small file access, makes no sense to stripe data over multiple flash based OST. Instead, once the file size is defined, Lustre will apply the weighted round-robin policy and will distribute the data over multiple flash OST devices. The question is to define what the maximum  size will be set so the file is suitable to be stored into the flash based OST.
+
+When the file start getting larger the stripping policy become important. The File Layout setting is sole based on the file size. It is assumed the larger the files are, the higher is the concurrency (as discussed before, not necessarily true). The task of defining intermediate stripes is difficult without a files distribution histogram and/or synthetic benchmarks demonstrating gains of performance when incrementally the stripe counts for a given file.
+
+\subsubsection{ODEN's initial OST layout}
+Each filesystem on ODEN cluster will be configured, initially, with a total of 8 flash based OST pools and 24 hdd based OSTs. Two OST pools will be configured to enable file system tiering. 
+
+\begin{table}[h]
+\centering
+ \begin{tabular}{||c c c||} 
+ \hline
+ OST tier & OST id & OST Pool \\ [0.5ex] 
+ \hline\hline
+ Flash &\textit{filesystem}-OST00[00-07] & flash.pool01 \\ 
+ \hline
+HDD & \textit{filesystem}-OST00[08-24] & hdd.pool01 \\ 
+ \hline
+ \end{tabular}
+ \caption{Initial OST pools}
+ \label{tab:initial-ost-pools}
+\end{table}
+
+The assignment of pools and PFL is related to the directory structure that will be created. Usually the first two levels of the filesystem structure tree is considered for simplification reasons (the deeper the file system structure is the more complicated and unpredictable it is, becoming impossible to selectively apply PFL for each layer). 
+\vspace{5mm}
+\dirtree{%
+.1 /lustre.
+.2 datasets.
+.3 data1.
+.4 prj-1000.
+.4 prj-2000.
+.4 prj-3000.
+.3 data2.
+.4 prj-2210.
+.4 prj-3310.
+.3 data3.
+.4 prj-1010.
+.4 prj-1100.
+.3 data4.
+.4 prj-4000.
+.4 prj-4400.
+.3 data5.
+.4 prj-5000.
+.4 prj-5500.
+.2 home.
+.3 johnf.
+.3 bobk.
+.3 annav.
+.3 sue.
+.2 scratch.
+.3 scrt-1000.
+.3 scrt-2212.
+.3 scrt-2323.
+.2 nvme.
+.3 tinyfiles.
+.3 smallfiles.
+}    
+
+Using the directory tree example above, would be recommended to define default PFL layouts for the initial two levels that are usually directories under super-user control. Directories created and manipulated by users may inherit the parent directory PFL layout or will be controlled by the user themselves. For this reason is \textbf{strongly recommended} to educate users on not changing or applying different layouts, rather just inheriting the PFL from the parents directory that will provide, overall, the best performance.
+
+In this example the system administrator would define the PFL for the following directory tree.
+\vspace{5mm}
+\dirtree{%
+.1 /lustre.
+.2 datasets.
+.2 home.
+.2 scratch.
+.2 nvme.
+}    
+
+The table \ref{tab:PFL-example} exemplify a possible layout structure.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l l l|}
+\hline
+Directory & Composite Layout & OST pool \\
+\hline\hline
+/lustre & 0 - EOF: 1 stripe & hdd.pool01 \\
+\hline
+/lustre/datasets & \begin{tabular}[l]{@{}l@{}}0 - 1GB: 1 stripe\\ 1GB - 10GB: 2 stripes\\ 10GB - 100GB: 4 stripes\end{tabular} & hdd.pool01 \\
+\hline
+/lustre/home & \begin{tabular}[l]{@{}l@{}}0 - 10MB: 1 stripe\\ 10MB - EOF: 1 stripe\end{tabular} & \begin{tabular}[c]{@{}l@{}}flash.pool01\\ hdd.pool01\end{tabular} \\
+\hline
+/lustre/scratch & \begin{tabular}[l]{@{}l@{}}0 - 10MB: 1 stripe\\ 10MB - 1GB: 1 stripe\\ 1GB - 10GB: 2 stripes\\ 10GB - 100GB: 4 stripes\\ 100GB - EOF: All stripes (-1)\end{tabular} & \begin{tabular}[c]{@{}l@{}}flash.pool01\\ hdd.pool01\\ hdd.pool01\\ hdd.pool01\\
+hdd.pool01\end{tabular} \\
+\hline
+/lustre/nvme & 0 - EOF: 1 stripe & flash.pool01 \\
+\hline
+\end{tabular}
+\caption{Directory PFL and OST binding}
+ \label{tab:PFL-example}
+\end{table}
+
+The sub-directories will inherit the PFL layout from its parent directory. The user has the ability to change the layout on his/her files and it is not possible to prohibit it. File layouts altered by users will not be tracked and in case of a file restore that layout will be lost.
+
+\subsubsection{How PFL is assigned}
+Once the file layouts are defined, the PFL is implemented through \textit{lfs setstripe} facility. This command must be executed on the parent directories. Consider the example below:
+\begin{verbatim}
+    lfs setstripe -E 4M -c 1 --pool flash -E 64M -c 4 -S 4M -E -1 -c -1 -S 16M \ 
+    --pool archive /mnt/lustre/dir1
+\end{verbatim}
+
+In the example above the first component has a single stripe that covers [0, 4MiB] and is allocated from an OST in the flash pool. The second component has four stripes that cover [4MiB, 64MiB] and has a stripe size of 4MiB. The last component covers [64MiB, EOF], has a stripe size of 16MiB, and uses all available OSTs in the archive pool.
+
+This type of command \textbf{must} be configured before the files are created, otherwise the file layout will 
+\subsubsection{HPE DMF}
+One specific USE CASE discussed during meetings was the full restore, in case of a catastrophic failure, where an entire filesystem must be rebuilt. In this scenario the following macro strategy will need to be taken.
+
+\tikzstyle{startstop} = [rectangle, rounded corners, minimum width=3cm, minimum height=1cm,text centered, draw=black, fill=gray!30]
+\tikzstyle{io} = [trapezium, trapezium left angle=70, trapezium right angle=110, minimum width=3cm, minimum height=1cm, text centered, draw=black, fill=gray!30]
+\tikzstyle{process} = [rectangle, minimum width=3cm, minimum height=1cm, text centered, draw=black, fill=gray!30]
+\tikzstyle{decision} = [diamond, minimum width=3cm, minimum height=1cm, text centered, draw=black, fill=gray!30]
+\tikzstyle{arrow} = [thick,->,>=stealth]
+
+\begin{figure}
+\begin{center}
+\begin{tikzpicture}[node distance=2cm]
+    \node (fsstart) [startstop] {FS recovery};
+    \node (hwrec) [process, below of=fsstart] {Hardware re-build};
+    \node (fsrebuild) [process, below of=hwrec] {Filesystem rebuild};
+    \node (fsready) [decision, below of=fsrebuild, yshift=-0.5cm] {FS ready?};
+    \node (issue) [process, right of=fsready, xshift=2cm] {Fix issues};    
+    \node (pfl) [io, below of=fsready, yshift=-0.5cm] {PFL};
+    \node (dmfrec) [process, below of=pfl] {DMF recovery};
+    \node (fsend) [startstop, below of=dmfrec] {FS online};
+    
+    \draw [arrow] (fsstart) -- (hwrec);
+    \draw [arrow] (hwrec) -- (fsrebuild);
+    \draw [arrow] (fsrebuild) -- (fsready);
+    \draw [arrow] (fsready) --  node[anchor=south] {yes} (pfl);
+    \draw [arrow] (fsready) --  node[anchor=east] {no} (issue);
+    \draw [arrow] (issue) |- (fsrebuild);
+    \draw [arrow] (pfl) -- (dmfrec);
+    \draw [arrow] (dmfrec) -- (fsend);
+\end{tikzpicture}
+\caption{Simple Flow chart - Recovery Procedures}
+\end{center}
+\end{figure}
+
+
+The PFL process is a set of scripts that applies different PFL and stripping policies to different directories on the file system (including the creation of first level directory tree within the namespace). This process should be integrated with DMF routines if possible, to avoid a manual intervention. Alternatively, it could be part of the file system build-up routine. Either way it must be done after the filesystem is ready and all other pre-requisites are applied with success.
+
+In case of a partial restore, where DMF will restore files in a specific sub-directory, it it likely wont be needed to re-apply PFL settings since it will inherit from the parent directory. 
+
+\end{document}
