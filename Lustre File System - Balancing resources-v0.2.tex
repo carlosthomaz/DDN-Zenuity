@@ -24,16 +24,22 @@ Balancing Lustre Filesystem Resources strategies \\
 \begin{center}
     \includegraphics[scale=0.14]{logo.png}\\[1cm] 
 \end{center}
-
+\begin{center}
+    version 1.1
+\end{center}
 \newpage
 
 \begin{versionhistory}
     \vhEntry{Draft}{05.06.20}{CT}{Initial version}
     \vhEntry{v0.1}{05.09.20}{CT}{Initial version}
     \vhEntry{v0.2}{05.12.20}{CT}{Initial version}
+    \vhEntry{v1.0}{06.08.20}{CT}{v1.0 - Section 5.0, implementation decisions}
+    \vhEntry{v1.1}{06.14.20}{CT}{v1.1 - Fix number of OSTs and other errors}
 
 \end{versionhistory}
+\newpage
 
+\tableofcontents
 
 \newpage
 \section{Introduction}
@@ -74,7 +80,7 @@ One namespace will be initially configured with five OSS building blocks, being 
 \subsection{Lustre File System - OST allocation algorithm}
 To optimize file system performance, Lustre MDT assigns file stripes to OSTs based on two allocation algorithms. Round-robin allocator give preference to location (spreading out stripes across OSTs to increase network bandwidth utilization) and the weighted allocator gives preference to available space (balancing loads across OSTs). Threshold and weighting factors for these two algorithms can be adjusted by the user. The MDT reserves 0.1 percent of total OST space and 32 inodes for each OST. The MDT stops object allocation for the OST if available space is less than reserved or the OST has fewer than 32 free inodes. The MDT starts object allocation when available space is twice as big as the reserved space and the OST has more than 64 free inodes. Note, clients could append files no matter what object allocation state is.\footnote{Definition extracted from Lustre 2.12.x manual}
 
-One namespace or filesystem is composed by multiple OSTs. Oden cluster's design considers a total of 26 OSTs being 8 of them based on NVMe Flash storage and 18 OSTs based on rotational devices (Hard Disk Drives - HDD). These OSTs are hosted by multiple OSS embedded virtual machines managed by the DDN SFA storage appliances. 
+One namespace or filesystem is composed by multiple OSTs. Oden cluster's design considers a total of 34 OSTs being 16 of them based on NVMe Flash storage and 18 OSTs based on rotational devices (Hard Disk Drives - HDD). These OSTs are hosted by multiple OSS embedded virtual machines managed by the DDN SFA storage appliances. 
 The current design for an initial deployment will follow the schema on table \ref{tab:ost-allocation}.
 \begin{table}[h]
 \centering
@@ -82,17 +88,17 @@ The current design for an initial deployment will follow the schema on table \re
  \hline
  Layer & Storage Block & OST indexes & Capacity & Est. Performance per OST\\ [0.5ex] 
  \hline\hline
- Flash & NV400[1] & [0-3] & N TiB & xxGiB/sec \\ 
+ Flash & NV400[1] & [0-7] & N TiB & xxGiB/sec \\ 
  \hline
- Flash & NV400[2] & [4-7] & N TiB & xxGiB/sec \\ 
+ Flash & NV400[2] & [8-15] & N TiB & xxGiB/sec \\ 
  \hline
- HDD & ES7990[1] & [8-13] & N TiB & xxGiB/sec \\
+ HDD & ES7990[1] & [16-21] & N TiB & xxGiB/sec \\
  \hline
- HDD & ES7990[2] & [14-19] & N TiB & xxGiB/sec \\
+ HDD & ES7990[2] & [22-27] & N TiB & xxGiB/sec \\
  \hline
- HDD & ES7990[3] & [20-25] & N TiB & xxGiB/sec \\
+ HDD & ES7990[3] & [28-33] & N TiB & xxGiB/sec \\
  \hline
- All & NV400/ES7990 & [0-25] & N TiB & xxGiB/sec \\ [1ex] 
+ All & NV400/ES7990 & [0-33] & N TiB & xxGiB/sec \\ [1ex] 
  \hline
 \end{tabular}
 \caption{Initial OST allocation and details per namespace}
@@ -110,9 +116,9 @@ At least, two OST pools shall be created to avoid miss-utilization of resources:
  \hline
  OST pool & Media type & OSSs & Storage Controller type \\ [0.5ex] 
  \hline\hline
- flash.pool & NVMe & [0-3] & ES400NVX \\ 
+ flash.pool & NVMe & [0-15] & ES400NVX \\ 
  \hline
- hdd.pool & Rotational device & [4-21] & ES7990X\\
+ hdd.pool & Rotational device & [16-33] & ES7990X\\
  \hline
  \end{tabular}
  \caption{Tiers - Hybrid namespace}
@@ -125,17 +131,17 @@ Additionally, table \ref{tab:example-ost-pools} shows OST pools that could be cr
 \centering
  \begin{tabular}{||c c c c||} 
  \hline
- OST pool & Media type & OSSs & Storage Controller type \\ [0.5ex] 
+ OST pool & Media type & OSTs & Storage Controller type \\ [0.5ex] 
  \hline\hline
- flash.nv1 & NVMe & [0-1] & ES400NVX \\ 
+ flash.nv1 & NVMe & [0-7] & ES400NVX \\ 
  \hline
-  flash.nv2 & NVMe & [2-3] & ES400NVX \\ 
+  flash.nv2 & NVMe & [8-15] & ES400NVX \\ 
  \hline
- hdd.es7990-1 & Rotational device & [4-9] & ES7990X\\
+ hdd.es7990-1 & Rotational device & [16-21] & ES7990X\\
  \hline
-  hdd.es7990-2 & Rotational device & [10-15] & ES7990X\\
+  hdd.es7990-2 & Rotational device & [22-27] & ES7990X\\
  \hline
-  hdd.es7990-3 & Rotational device & [16-21] & ES7990X\\
+  hdd.es7990-3 & Rotational device & [28-33] & ES7990X\\
  \hline
  \end{tabular}
  \caption{Example of OST pools}
@@ -156,8 +162,7 @@ Based on previous meetings and technical conversations between DDN and HPE, data
 The full re-balancing is not encouraging for systems with capacity on that magnitude. At least not without special tools and \textit{Data-loss mitigation} strategy, not mentioning an extended period of time where the file system will be required to be put in maintenance mode. A \textit{Partial re-balancing} may be needed for maximum utilization of resources.
 
 \subsection{Full Data Re-balancing}
-The idea of data re-balancing is to distribute the existing data residing on previously deployed OST across the recently added resources, in a way that, after the data re-balancing is done, all OSTs are evenly used. In this scenario we assume no new data will be ingested into the file system until re-balancing is completed (\ref{fig:full-rebalance strategy}. 
-
+The idea of data re-balancing is to distribute the existing data residing on previously deployed OST across the recently added resources, in a way that, after the data re-balancing is done, all OSTs are evenly used. In this scenario we assume no new data will be ingested into the file system until re-balancing is completed.
 
 \begin{figure}[h]
     \centering
@@ -372,5 +377,42 @@ Lustre QOS may be used to limit the number of Lustre RPC per user, so throttling
 A fully automated solution will also require a policy engine that may trigger tasks automatically. Policy Engine is out of scope at this moment. 
 
 Finally a review and agreement of how to measure performance to match the KPI for each namespace must be agreed since the execution of benchmarks on a live system will impact the production and it is not recommended. Also, depending on the strategy adopted it may not be technically possible to run end-to-end benchmarks thus requiring assumptions about how to calculate overall system peak performance.
+
+\section{Implementation Decisions}
+After meetings with HPE and Zenuity, it is been decided to use the \textit{Fill Up and append} approach and avoid excessive amount of data movement in an attempt to free up space in the existing OST. 
+
+The best strategy is to set the capacity threshold (that triggers deployment of additional storage building block) as early as possible to best leverage the parallel file system performance and avoid huge capacity gaps between existing and newly added OSTs.
+
+It is been decided that an alarm will be set on the file system informing the system administrators when a pre-defined capacity threshold is met. This alarm will then trigger the addition of new building blocks adding capacity and performance (scaling out). After the deployment of expansions, Lustre will automatically recognize the addition of new OSTs and will start allocating new files on the new OSTs until the overall OST capacity became evenly. The earlier the addition of OSTs, the best performance will be achieved since I/O concurrency may be spread out more efficiently when all OSTs has enough available space. 
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[scale=0.50]{OST fill up - best case.png}
+    \caption{Addition of new OSTs as Soft Limit is reached}
+    \label{fig:ost-fillup best case}
+\end{figure}
+
+In case of addition of new OSTs only once the capacity hits the maximum threshold, it may be impossible (without manual data relocation) to ever use the filled up OSTs for write. Reads will be continue be executed in parallel.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[scale=0.50]{ost-fill up worst case.png}
+    \caption{Addition of new OSTs as Hard Limit is reached}
+    \label{fig:ost-fillup worst case}
+\end{figure}
+
+
+The use of PFL will automate the task of allocating data since the OST usage and placement will be done obeying a pre-established PFL policy. This will avoid end-users to manually assign OST or stripping policies, making easier and simple the use of Lustre file system.
+
+Additional OST pools may be required to split the \textit{Rotational} domain. In some occasions, such as full utilization of available capacity before adding an expansion, may require system administrator to manually maneuver data. To better achieve this task additional OST pools may be needed for storage administration purposes.
+
+\subsection{Capacity Thresholds}
+Capacity thresholds will be added to provide system administration hints when the file system is close to be filled up or when it is closed to reach a certain pre-defined capacity limit. 
+
+The best practices suggests at least two capacity thresholds to be set. The first one is a soft limit that indicates when the capacity reaches an optimal value (that is perfectly reasonable to add additional expansions and still operating in full speed) and a hard limit, for a maximum threshold before the file system became full.
+
+In order to guarantee the mutually agreed performance KPIs, the file system shall not be filled up with more than 80\% of its capacity. Performance is not guaranteed in a case when it is utilized in more than 80\%. A Hard limit should then be set to 80\% and if reached the OST should became unavailable for writing new datasets, but still possible to delete and modify existing data. 
+
+Such thresholds will be implemented on the monitoring and managing frameworks as alarms that will indicate the overall capacity utilization.
 
 \end{document}

@@ -1,0 +1,70 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{setspace}
+\usepackage{graphicx}
+\usepackage{dirtree}
+\usepackage{fancyvrb}
+\usepackage[hang]{footmisc}
+\usepackage{vhistory}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows}
+\renewcommand{\hangfootparskip}{10pt}
+\setlength{\skip\footins}{1cm}
+\setlength{\parskip}{1em}
+\usepackage[a4paper, total={6in, 8in}]{geometry}
+
+
+
+\title{%
+Installing Virtualization Environment for Configuration Manager and PXE boot automation \\
+\large Zenuity Oden Cluster (NGSC)}
+\author{Carlos Thomaz - cthomaz@ddn.com}
+\date{\today}
+\begin{document}
+
+\maketitle
+
+
+\begin{center}
+    \includegraphics[scale=0.14]{logo.png}\\[1cm] 
+\end{center}
+
+\newpage
+
+\begin{versionhistory}
+    \vhEntry{Draft}{05.24.20}{CT}{Initial version}
+
+\end{versionhistory}
+\newpage
+
+
+\section{Introduction}
+This documents describes how to install and configure virtualized environments required for the management and deployment of Zenuity's storage servers. This procedure will be needed to be done only on the bare metal servers that will host the two instances of PXE boot automation and Configuration Manager. 
+
+It's been defined the active bare metal server as the one reserved previously by Insight as aggregation server. 
+
+\section{Pre-requisites}
+In order to keep compatibility and full support for Insight, the bare metal server will be configured with Centos 7.8 and addtional extensions required to implement \textit{libvirt}.
+
+\subsection{Installing required packages and Libraries}
+\begin{Verbatim}[frame=single]
+    yum install qemu-kvm libvirt libvirt-client virt-install virt-viewer
+\end{Verbatim}
+This should be enough to build and run virtual machines. Accept all the recommended patches that \textit{yum} will suggest as pre-requisites.
+
+Download the Operating Systems ISO for the virtual machines. In this case, Ubuntu 18 LTS will be provisioned.
+\begin{Verbatim}[frame=single]
+    wget \ 
+http://ubuntu.cs.utah.edu/releases/bionic/ubuntu-18.04.4-live-server-amd64.iso
+\end{Verbatim}
+
+\subsection{Setting up virtual Machines}
+\begin{Verbatim}[frame=single]
+    virt-install --name=Ubuntu18vm --ram=4096 --vcpus=2 \
+    --cdrom=/root/ubuntu-18.04.4-live-server-amd64.iso  --os-type=linux \
+    --os-variant=ubuntu18.04 --network type=direct,source=eno1 --disk \
+    path=/data/vms/ubuntu18lts.dsk,size=48 \
+\end{Verbatim}
+
+
+\end{document}

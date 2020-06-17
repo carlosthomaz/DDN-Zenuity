@@ -13,12 +13,13 @@
 \usepackage[a4paper, total={6in, 8in}]{geometry}
 
 
-
 \title{%
 Implemeting Progressive File Layouts on Lustre File System \\
 \large Zenuity Oden Cluster (NGSC)}
 \author{Carlos Thomaz - cthomaz@ddn.com}
 \date{\today}
+
+
 \begin{document}
 
 \maketitle
@@ -28,14 +29,20 @@ Implemeting Progressive File Layouts on Lustre File System \\
     \includegraphics[scale=0.14]{logo.png}\\[1cm] 
 \end{center}
 
+\begin{center}
+version 2.0
+\end{center}
+
 \newpage
 
 \begin{versionhistory}
     \vhEntry{Draft}{05.12.20}{CT}{Initial version}
     \vhEntry{1.0}{05.20.20}{CT}{Added DMF use case}
-
+    \vhEntry{2.0}{06.14.20}{CT}{Added chapter 3.0 - Zenuity Data Assessment}
 \end{versionhistory}
+\newpage
 
+\tableofcontents
 
 \newpage
 \section{Introduction}
@@ -146,7 +153,7 @@ The utilization of flash based devices is easier. Since the intention of these d
 When the file start getting larger the stripping policy become important. The File Layout setting is sole based on the file size. It is assumed the larger the files are, the higher is the concurrency (as discussed before, not necessarily true). The task of defining intermediate stripes is difficult without a files distribution histogram and/or synthetic benchmarks demonstrating gains of performance when incrementally the stripe counts for a given file.
 
 \subsubsection{ODEN's initial OST layout}
-Each filesystem on ODEN cluster will be configured, initially, with a total of 8 flash based OST pools and 24 hdd based OSTs. Two OST pools will be configured to enable file system tiering. 
+Each filesystem on ODEN cluster will be configured, initially, with a total of 16 flash based OST pools and 18 hdd based OSTs. Two OST pools will be configured to enable file system tiering. 
 
 \begin{table}[h]
 \centering
@@ -154,9 +161,9 @@ Each filesystem on ODEN cluster will be configured, initially, with a total of 8
  \hline
  OST tier & OST id & OST Pool \\ [0.5ex] 
  \hline\hline
- Flash &\textit{filesystem}-OST00[00-07] & flash.pool01 \\ 
+ Flash &\textit{filesystem}-OST00[00-15] & flash.pool01 \\ 
  \hline
-HDD & \textit{filesystem}-OST00[08-24] & hdd.pool01 \\ 
+HDD & \textit{filesystem}-OST00[16-33] & hdd.pool01 \\ 
  \hline
  \end{tabular}
  \caption{Initial OST pools}
@@ -214,24 +221,24 @@ The table \ref{tab:PFL-example} exemplify a possible layout structure.
 
 \begin{table}[h]
 \centering
-\begin{tabular}{|l l l|}
-\hline
-Directory & Composite Layout & OST pool \\
-\hline\hline
-/lustre & 0 - EOF: 1 stripe & hdd.pool01 \\
-\hline
-/lustre/datasets & \begin{tabular}[l]{@{}l@{}}0 - 1GB: 1 stripe\\ 1GB - 10GB: 2 stripes\\ 10GB - 100GB: 4 stripes\end{tabular} & hdd.pool01 \\
-\hline
-/lustre/home & \begin{tabular}[l]{@{}l@{}}0 - 10MB: 1 stripe\\ 10MB - EOF: 1 stripe\end{tabular} & \begin{tabular}[c]{@{}l@{}}flash.pool01\\ hdd.pool01\end{tabular} \\
-\hline
-/lustre/scratch & \begin{tabular}[l]{@{}l@{}}0 - 10MB: 1 stripe\\ 10MB - 1GB: 1 stripe\\ 1GB - 10GB: 2 stripes\\ 10GB - 100GB: 4 stripes\\ 100GB - EOF: All stripes (-1)\end{tabular} & \begin{tabular}[c]{@{}l@{}}flash.pool01\\ hdd.pool01\\ hdd.pool01\\ hdd.pool01\\
-hdd.pool01\end{tabular} \\
-\hline
-/lustre/nvme & 0 - EOF: 1 stripe & flash.pool01 \\
-\hline
-\end{tabular}
+    \begin{tabular}{|l l l|}
+        \hline
+         Directory & Composite Layout & OST pool \\
+        \hline\hline
+        /lustre & 0 - EOF: 1 stripe & hdd.pool01 \\
+        \hline
+        /lustre/datasets & \begin{tabular}[l]{@{}l@{}}0 - 1GB: 1 stripe\\ 1GB - 10GB: 2 stripes\\ 10GB - 100GB: 4 stripes\end{tabular} & hdd.pool01 \\
+        \hline
+        /lustre/home & \begin{tabular}[l]{@{}l@{}}0 - 10MB: 1 stripe\\ 10MB - EOF: 1 stripe\end{tabular} & \begin{tabular}[c]{@{}l@{}}flash.pool01\\ hdd.pool01\end{tabular} \\
+        \hline
+        /lustre/scratch & \begin{tabular}[l]{@{}l@{}}0 - 10MB: 1 stripe\\ 10MB - 1GB: 1 stripe\\ 1GB - 10GB: 2 stripes\\ 10GB - 100GB: 4 stripes\\ 100GB - EOF: All stripes (-1)\end{tabular} & \begin{tabular}[c]{@{}l@{}}flash.pool01\\ hdd.pool01\\ hdd.pool01\\ hdd.pool01\\
+        hdd.pool01\end{tabular} \\
+        \hline
+        /lustre/nvme & 0 - EOF: 1 stripe & flash.pool01 \\
+        \hline
+    \end{tabular}
 \caption{Directory PFL and OST binding}
- \label{tab:PFL-example}
+\label{tab:PFL-example}
 \end{table}
 
 The sub-directories will inherit the PFL layout from its parent directory. The user has the ability to change the layout on his/her files and it is not possible to prohibit it. File layouts altered by users will not be tracked and in case of a file restore that layout will be lost.
@@ -245,7 +252,8 @@ Once the file layouts are defined, the PFL is implemented through \textit{lfs se
 
 In the example above the first component has a single stripe that covers [0, 4MiB] and is allocated from an OST in the flash pool. The second component has four stripes that cover [4MiB, 64MiB] and has a stripe size of 4MiB. The last component covers [64MiB, EOF], has a stripe size of 16MiB, and uses all available OSTs in the archive pool.
 
-This type of command \textbf{must} be configured before the files are created, otherwise the file layout will 
+This type of command \textbf{must} be configured before the files are created, otherwise the file layout will not be properly applied.
+
 \subsubsection{HPE DMF}
 One specific USE CASE discussed during meetings was the full restore, in case of a catastrophic failure, where an entire filesystem must be rebuilt. In this scenario the following macro strategy will need to be taken.
 
@@ -284,5 +292,104 @@ One specific USE CASE discussed during meetings was the full restore, in case of
 The PFL process is a set of scripts that applies different PFL and stripping policies to different directories on the file system (including the creation of first level directory tree within the namespace). This process should be integrated with DMF routines if possible, to avoid a manual intervention. Alternatively, it could be part of the file system build-up routine. Either way it must be done after the filesystem is ready and all other pre-requisites are applied with success.
 
 In case of a partial restore, where DMF will restore files in a specific sub-directory, it it likely wont be needed to re-apply PFL settings since it will inherit from the parent directory. 
+
+\newpage
+\section{Zenuity Initial Data assessment}
+Zenuity has provided information on how the file system structure may look like once the system turns into production. The data provided is extremely relevant and help designing and establishing a possible initial File Layout for the production file systems.
+
+\subsection{Directory Structure}
+The following directory tree is likely to be present on every namespace within each firezone.
+
+\vspace{5mm}
+\dirtree{%
+.1 /fz1a/set1a/raw.
+.2 /flc.
+.3 /abc123.
+.4 /202006.
+.5 /03T140000.
+.6 /zebra\_alpha\_abc123\_20200603T140000-20200603T140100\_flc.vpcap.
+.6 /zebra\_alpha\_abc123\_20200603T140100-20200603T140200\_flc.vpcap.
+.2 /flr.
+.3 /abc123.
+.4 /202006.
+.5 /03T140000.
+.6 /zebra\_alpha\_abc123\_20200603T140000-20200603T140100\_flr.vpcap.
+.6 /zebra\_alpha\_abc123\_20200603T140100-20200603T140200\_flr.vpcap.
+}    
+
+Multiple sensors will define the number of sub-directories created. In the example above /flc and /flr denotes data acquired from two different sensors. The \textit{vpcap} are the large and dominant files (size to be parametrized) residing in this sub-directory.
+
+Once the data is processed, output will be written into a different sub-directory tree, but still under the same namespace. 
+
+\vspace{5mm}
+\dirtree{%
+.1 /fz1a/set1a/out.
+.2 /flr\_convert.
+.3 /1.0.0.
+.4 /abc123.
+.5 /202006.
+.6 /03T140000.
+.7 /zebra\_alpha\_abc123\_20200603T140000-20200603T140100\_flr\_convert.xyz.
+.7 /zebra\_alpha\_abc123\_20200603T140000-20200603T140200\_flr\_convert.xyz.
+}
+
+\subsection{File Size Distribution}
+A file size histogram has been provided based on the current datasets on the existing filesystem. 
+
+\begin{figure}
+    \centering
+    \includegraphics[scale=0.52]{zen_histogram.png}
+    \caption{File Size Distribution}
+    \label{fig:zen_histogram}
+\end{figure}
+
+The input and output file size can be customized by the user, but may range in order of hundred of Megabytes to Gigabytes. In general these files could be considered as part of the \textit{large} file datasets.
+
+The histogram shows about 50\% of the existing files to be smaller than 10MiB where half of these files to be smaller than 8KiB. If the number of small files continue growing proportionally, the file system may be driven by small and medium files. 
+
+Since the flash storage pool on each namespace is limited to approximately 225TiB of usable capacity, it may not be optimal to store files larger than 1MiB range on this tier to avoid capacity starvation on flash tier. 
+
+The utilization of Data on Metadata depends on the number of files smaller than 64KiB since this is the threshold used to format the filesystem. It can be changed, but not recommended due the size of available MDTs. DoM as large as 64KiB can yield the maximum number of inodes (worst case scenario) to 125 million inodes per Metadata Target which is very low provided the overall capacity of the file system. Ideally, DoM should be explicitly on few known subdirectories where the performance is highly impacted by the access and creation of very small files. 
+
+An intermediate solution will be storing the files up to 1MB into the flash ost pool providing capacity of about 225 million files in the worst case scenario. Files larger than 10GiB could be striped over 2 but no more than 4 OSTs (large number of stripes adds excessive overhead and it is only recommended when the number of file concurrency is high enough. Mostly useful for shared-file patterns over flash based devices). 
+
+\begin{table}[h]
+\centering
+ \begin{tabular}{||c c c||} 
+ \hline
+ OST tier & Stripe Layout & Component \\ [0.5ex] 
+ \hline\hline
+ flash & 0-1MB & 1 stripe \\ 
+ \hline
+ rotational & 1MB-1GB & 1 stripe \\ 
+ \hline
+ rotational & 1GB-100GB & 2 stripes\\
+ \hline
+  rotational & 10GB or more & 4 stripes\\
+ \hline
+ \end{tabular}
+ \caption{PFL layout based on the current file histogram}
+ \label{tab:Proposed PFL layout}
+\end{table}
+
+\begin{figure}
+    \centering
+    \includegraphics[scale=0.50]{zen-histogram-color.png}
+    \caption{File size distribution and OST Layout}
+    \label{fig:file-size distribution and OST layout}
+\end{figure}
+
+\subsection{Data Balancing}
+Data balancing will be automatically applied by Lustre based on the weighted round-robin algorithm. Lustre will optimize the data placement per OST tiers obeying the PFL policies. Once the filesystem reaches a certain threshold (defined by Zenuity) additional building block will be provisioned to fulfill the capacity requirements. 
+
+If the capacity threshold is set too high, it may lead to a permanent unbalanced namespace since no data will be moved nor copied across OSTs. In this scenario, once the additional capacity is added into the file system, all the new data will be written on the less usable set of OSTs (as explained on Data Rebalance documentation - Fill up and append strategy).
+
+The following PFL layout may be applicable based on the histogram provided. 
+
+\begin{verbatim}
+    lfs setstripe -E 1M -c 1 --pool flash -E 1G -c 1 -S 1M -E 100G -c 2 -E -1 \
+    -c 4 --pool rotational <target directory>
+\end{verbatim}
+
 
 \end{document}

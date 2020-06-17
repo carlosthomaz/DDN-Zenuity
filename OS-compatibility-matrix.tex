@@ -33,6 +33,7 @@ Lustre File System - OS Compatibility Matrix \\
     \vhEntry{v1.0}{05.14.20}{CT}{v1.0 - Current compat. matrix}
     \vhEntry{v1.1}{05.14.20}{CT}{v1.1 - DMF nodes version fixed}
     \vhEntry{v1.2}{05.18.20}{CT}{v1.2 - SLES 12 SP5 support request placeholder}
+    \vhEntry{v1.3}{06.08.20}{CT}{v1.3 - Confirmation about lenght of support for SLES 12 SP 5}
 \end{versionhistory}
 
 
@@ -127,5 +128,14 @@ DDN will also provide patches and Lustre clients if needed. The \textbf{-ddn8} t
 
 \section{Future requests}
 HPE has requested support for SLES 12 SP5 due the possibility of SLES 12 SP4 going End-of-support soon. Whamcloud is tracking this request under DDN internal JIRA ticket \textbf{DDN-1261}. Whamcloud is proposing support for SLES 12 SP5 done with ES5.1.1 release, targeted to June time-frame. 
+
+\subsection{SLES 12 SP5 support in long term}
+Whamcloud engineering has confirmed on the internal ticket DDN-1261 that ES5.1.1 client will be supported on SLES 12 SP5 for at least 3 years after installation is completed. The Lustre candidate version is Lustre 2.12.3-ddn35. 
+
+Lustre tags \textbf{-ddnXX} will change every time a patch is required. Whamcloud will make sure the major versions (2.12.x) still compatible and supported on SLES 12 SP5. 
+
+If a critical path on kernel or MOFED is required, then a ticket will be opened at whamcloud to get the proper Lustre version validated to work with the new kernel and/or MOFED versions.
+
+If a Kernel or MOFED is updated without prior validation by Whamcloud, Lustre support will be void.
 
 \end{document}

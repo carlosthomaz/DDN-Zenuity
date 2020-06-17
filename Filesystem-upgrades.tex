@@ -24,13 +24,19 @@ Upgrading Lustre File System with Minimal Downtime\\
 \begin{center}
     \includegraphics[scale=0.14]{logo.png}\\[1cm] 
 \end{center}
-
+\begin{center}
+    version 1.0
+\end{center}
 \newpage
 
 \begin{versionhistory}
     \vhEntry{Draft}{05.12.20}{CT}{DRAFT - Initial version}
+    \vhEntry{v1.0}{06.14.20}{CT}{v1.0 - Typos and fixes including update on decisions related to chapter 3}
 \end{versionhistory}
 
+\newpage
+
+\tableofcontents
 
 \newpage
 \section{Introduction}
@@ -45,7 +51,7 @@ There's also chances the system(s) will be put under maintenance for the purpose
 Systems upgrades will be triggered when a file system capacity is close to full, performance of the current file system is not enough or due a potential cyclic planed upgrade.\footnote{For instance, some projects forecast hardware upgrades in advanced, regardless if the capacity or performance requires it. Usually the use of resources are imminent and such upgrades are taken pro-actively to avoid an unexpected resource shortage}
 
 \subsubsection{Planed downtime}
-Eight (8) hours a month will be given to general maintenance purposes. Hardware and Software upgrades may use this planed downtime to \textbf{complete} such tasks. The planed downtime will likely be used for multiple concurrent tasks, so a filesystem maintenance must be agreed in advance since possible tasks may require access to data. 
+Eight (8) hours a quarter of year will be given to general maintenance purposes. Hardware and Software upgrades may use this planed downtime for \textbf{complete} such tasks. The planed downtime will likely be used for multiple concurrent tasks, so a filesystem maintenance must be agreed in advance since possible tasks may require access to data. 
 
 \subsubsection{Scheduling Upgrades}
 
@@ -79,19 +85,28 @@ The timeline\footnote{Times are subjected to adjustments upon refinement} on Fig
 The goal is to minimize the chances of failures during the planed downtime. However it will be necessary to create a fallback or bail-out plan. These criterias are not yet clear, but will be required to be set as milestones where subsequent tasks will rely on. One example is DOA and lack of spare part for on-site replacement. This hypothetical scenario may lead to a bail-out depending on how the new spare part is shipped. Another example is a logical error when preparing the new upgrade units for go-live. A software bug may be found requiring a bail-out as well. A more serious scenario is a failure within the 8 hours planed downtime, requiring a fall-back plan to re-establish the system to the state prior the beginning of the upgrade (undo). In such cases, the availability and file system reliability are prioritized.
 
 \subsection{System updates - leveling software and firmware and applying patches and fixes}
-AS mentioned previously most of the tasks will be done concurrently. That includes the software installation on the new DDN Exascaler \textit{stacks} and possible hardware firmware updates. Considering a planed downtime, in a moment when the clock start counting, the existing file system will be placed in maintenance mode, namespace will be unmounted and hardware firmware upgrades will be applied (if necessary). There are two possible scenarios for the system upgrades.
+As mentioned previously most of the tasks will be done concurrently. That includes the software installation on the new DDN Exascaler \textit{stacks} and possible hardware firmware updates. Considering a planed downtime, in a moment when the clock start counting, the existing file system will be placed in maintenance mode, namespace will be unmounted and hardware firmware upgrades will be applied (if necessary). There are two possible scenarios for the system upgrades.
 \subsubsection{Upgrades that require an Exascaler update}
 In the moment of planing for upgrade, it may be desired or needed to also plan for a software upgrade, meaning, hardware will be added to aggregate capacity and performance, but also Exascaler may be required to be upgrade (e.g.: need of fixing a bug or a possible new feature). In this scenario, the software upgrade is required to be prioritized. The tasks done before the planed downtime will assume the new Exascaler version. Once the system is placed in maintenance mode, the existing building blocks will be updated and once is confirmed to be successfully executed, we will proceed with the new hardware addition.
 
 \subsubsection{Upgrades that doesn't require an Exascaler update}
-In a more simplistic scenario, there will be no need of Exascaler update. In this case, the same version as the currenty running system will be installed and when the planed downtime start counting, the system will be place in maintenance mode and the new building blocks will be immediately added into the file system. This scenario is simpler and less risky.
+In a more simplistic scenario, there will be no need of Exascaler update. In this case, the same version as the currently running system will be installed and when the planed downtime start counting, the system will be place in maintenance mode and the new building blocks will be immediately added into the file system. This scenario is simpler and less risky.
 
 \subsection{Versions and updates}
 A proper risk analysis should be done during the upgrade plan. It is necessary to evaluate if an upgrade is required and what are the needs and risks associated with that. If a filesystem is running without issues and there's no new feature required, it is not recommended to plan for software upgrades. However, an outstanding bug or issue may require a sole software upgrade (not associated with a hardware upgrade).
 
 \section{In production maintenance}
-After a sucessfull upgrade or software update, it may be required to run a set of tasks with the system in production and concurrently with user's jobs. These tasks may include partial data re-balancing or data-redistribution. 
+It's been mutually agreed that no data-rebalancing will be considered as part of the system upgrade procedure. As explained on the File System Re-balancing strategy documentation, the \textit{Fill up and Append} strategy will be considered for the on-going namespace upgrades.
 
-It is imperative to have a former decision on what strategy will be taken in consideration after an upgrade. If data re-balancing (full or partial) is required a set of tasks will be required to run for hours or even days after the physical / hardware upgrade concludes. As detailed on the File System Re-balancing strategies documentation, each possible alternative may affect the system availability and peroformance differently and must be agreed in advance. 
+A capacity threshold will be set to a value that enables addition of new hardware and will let Lustre file system to manage the free space and optimally to fill up the new storage target resources until it gets even. This strategy relies on the Lustre file system OST allocation algorithm (Weighted Round Robin) in addition the correct PFL (Progressive File Layout) which will properly indicate how files will be laid out according to their size. 
+
+For storage maintenance that requires downtime, the quarter year planned downtime window will be utilized.
+
+\subsection{Automation and System Maintenance}
+The system maintenance may become more complex with addition of new namespaces. Manual interventions are error prone and shall be avoided.
+
+A configuration manager is being designed to be deployed and used in most of the system administration tasks where a set of procedures are architected and implemented to provide a homogeneous and simplified way to perform tasks in parallel and reliably.
+
+System upgrades, including patching and software upgrades will be then automated using Configuration Manager (Ansible) with pre-defined and tested \textit{playbooks}. The details and low level design of configuration manager is explained in a separate documentation.
 
 \end{document}
